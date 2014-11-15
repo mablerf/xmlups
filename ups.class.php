@@ -1,7 +1,7 @@
-<?
+<?php
 ////////////////////////////////////////////////////////////////////////////////
 //
-// AaronUPS Version 0.4: (PHP/cURL-XML)
+// AaronUPS Version 0.5: (PHP/cURL-XML)
 // aaronups@shadowguarddev.com
 //
 // UPS Rate and Rate Shopping Script.
@@ -28,92 +28,15 @@
 // Find it at http://www.kreisler.org/surepay/index.php
 //
 ////////////////////////////////////////////////////////////////////////////////
- 
-###########################################################################################
-## Sample Code (simple) using this script
-###########################################################################################
-#
-# This script should be pretty self explainitory.  Copy this section of code
-# into another file in the same directory as aaronups.php (this file) to test
-# it out.  be sure you fill in your $AccessLicenseNumber on line 204 of this
-# file, as well as your UserID and Password on the following lines (205,206)
-#
- 
-$SAMPLE=<<<__HTML__
- 
-<?
-    // include the UPS Script.
-    require_once('aaronups.php');
- 
- 
-    // Create an opject of type ups
-    $MyUPS=new ups();
- 
-    // set shipper info
-    $MyUPS->SetShipper('Springfield','MO','65807','US');
-     
-    // uncomment this if you ship from somewhere other than the address you 
-    // registered your key to.
-    //$MyUPS->SetShipFrom('Springfield','MO','65807','US');  
- 
-    // Set the Ship To address.  This will probably be gleaned from the user
-    $MyUPS->SetShipTo('Cassville','MO','65625','US',1);
-     
-    // Add a package.  Note that I saved the package number for use in the following functions
-    $pkg=$MyUPS->AddPackage('02','First Package',33);
-    $MyUPS->SetPackageValue($pkg,87.53); // Adding an insured value
-    $MyUPS->SetPackageSize($pkg,108,2,2);    // Adding a size to the box
- 
-    // adding another package (with an insured value)
-    $pkg=$MyUPS->AddPackage('02','Second Package',113,25.50);
-     
-    // Request the rates this shipping setup
-    $UPSError=$MyUPS->ModeRateShop();
-     
-    // limit the shipping services I want displayed 
-    //    (these are the service codes from ups. NOTE: you can use either integers (12) or strings ('12') )
-    $MyUPS->SetRateListLimit('03',12,'02');
- 
-    // get the list of rates I specified, adding 1.50 to each one for handling
-    $selopt=$MyUPS->GetRateListShort(1.50);
- 
-    // set the services list back to all of them
-    $MyUPS->SetRateListLimit();
- 
-    // I debuged here to see that everything was happy =)
-//  $MyUPS->Debug();
- 
- 
-    // here I'm getting the cost of service '03' (ground).  usually this would be on the next page
-    // after the user selected something from the options of ModeRateShop
-    $MyRate=$MyUPS->ModeGetRate('03');
- 
- 
-// used my values I got back.
-echo <<<__FOO__
- 
-<select name="foo">
-    $selopt
-</select>
- 
- 
-<br><br>
-Cost is $MyRate.
-__FOO__;
- 
-?>
- 
-__HTML__;
-#
-#
-###########################################################################################
+
  
 #######################################################################################################################
 ## Function List
 #######################################################################################################################
 #
 # Constructors - Look here for some default arrays, also, if UPS adds new service options you need to change one of them
-#   ups()
+#   ups($debug = FALSE, $DEV = false, $AccessLicenseNumber = null, $UserId = null, $Password = null, $ShipperNumber = null)
+#		// if parameters aren't passed in here, they're populated from static variables
 #
 # These functions probably won't be used by most people.  You will want to set the variables staticly for most cases
 #   SetPostURL($url)
@@ -142,13 +65,27 @@ __HTML__;
 #                       PRICE {default} - sorts the service options by the price, ascending
 #                       SERVICE - sorts the service options by the name of the service asc
 #                   // $type is one of the following:
+#						ARRAY - returns an array of results to be formatted/handled outside of this class
 #                       OPTION {default} - returns option rows for use in a select box (you provide the select statement)
 #                       RADIO - returns a group of radio buttons.  They are named UPSShipService, and are encapsulated in div's of class "UPSRadio"
 #                   // $display is one of the following:
 #                       TCOST_SERVICE {default} - The services will show up as "PRICE - SERVICE NAME"
 #                       BASEDIFF - The first service will show up as above, the rest will show "upgrade to SERVICE NAME for PRICEDIFF"
+#	GetRateListWithArrival($handling=0,$sort='',$type='',$display='')
+#					// returns information for a selection of the service to ship via
+#					// $sort is one of the following:
+#                       PRICE {default} - sorts the service options by the price, ascending
+#                       SERVICE - sorts the service options by the name of the service asc
+#                   // $type is one of the following:
+#						ARRAY - Currently the only option available. Returns an array of results to be formatted/handled outside of this class 
+#                   // $display is one of the following:
+#						{default} - "SERVICE NAME"
+#                       TCOST_SERVICE - The services will show up as "PRICE - SERVICE NAME"
+#                       BASEDIFF - The first service will show up as above, the rest will show "upgrade to SERVICE NAME for PRICEDIFF"
 #
-#   SetRateListLimit(/*...*/)       // sets the rates that will be returned if they are available.  empty sets all avaliable (default)
+#
+#   SetRateListLimit(/*...*/)       
+#					// sets the rates that will be returned if they are available.  empty sets all avaliable (default)
 #
 # Package Functions
 #   AddPackage($PackageType,$Description,$Weight,$Value=0.0,$WeightUnit='LBS',$CurrencyUnit='USD')
@@ -182,9 +119,6 @@ __HTML__;
  
 class ups
 {
- 
- 
- 
 //////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
@@ -196,71 +130,84 @@ class ups
 ##########################################################################
 ###### YOU MAY WISH TO SET THESE STATICLY ################################
 ##########################################################################
-     
-    // URL to send request to
-    var $postURL='https://www.ups.com/ups.app/xml/Rate';
- 
-    // Access Passwords
-    var $AccessLicenseNumber='';
-    var $UserId='';
-    var $Password='';
- 
+
+	// Access Credentials 
+	// get these from https://www.ups.com/upsdeveloperkit
+	private $AccessLicenseNumber = ''; 
+	private $ShipperNumber = ''; 
+	private $UserId='';
+	private $Password='';
+	
+	// Valid values are:
+	//  00- Rates Associated with Shipper Number;
+	//  01- Daily Rates;
+	//  04- Retail Rates;
+	//  53- Standard List Rates;
+	var $CustomerClassificationCode = '00'; 
+	
+	private $DEV = false;
+	private $RequestTypes = array( // Key must be a valid 'RequestAction'
+			'Rate' => array(
+					'URL' => 'https://onlinetools.ups.com/ups.app/xml/Rate',
+					'DEVURL' =>  'https://wwwcie.ups.com/ups.app/xml/Rate'), 
+			'TimeInTransit' => array(
+					'URL' => 'https://onlinetools.ups.com/ups.app/xml/TimeInTransit',
+					'DEVURL' =>  'https://wwwcie.ups.com/ups.app/xml/TimeInTransit'
+			));
+	private $postURL; // use SetPostURL to set this
+	
     // Pickup Service You have
     var $UPSPickupTypeCode='01';
  
     // CustomerContext can contain XML you want Posted Back
-    var $CustomerContext='AaronUPS Version 0.2: (PHP/cURL-XML)';
- 
- 
+    var $CustomerContext = 'AaronUPS Version 0.5: (PHP/cURL-XML)';
+  
     // Address of Shipper.  should match info givin to ups
-    var $ShipperCity='Rogersville';
-    var $ShipperState='MO';
-    var $ShipperPostalCode='65742';
-    var $ShipperCountry='US';
- 
-    // Address package is shipped from, use if different than above
-    var $ShipFromCity='Springfield';
-    var $ShipFromState='MO';
-    var $ShipFromPostalCode='65804';
-    var $ShipFromCountry='US';
+    protected $ShipFromCity='Rogersville';
+    protected $ShipFromState='MO';
+    protected $ShipFromPostalCode='65742';
+    protected $ShipFromCountry='US';
  
     // Default Service
-    var $DefaultService=3; // 3=Ground
+    var $DefaultService = '03'; // 3=Ground
  
 ###############################################################################################
 ## These variables are usually set with functions, so you probably don't want to edit them.
 ###############################################################################################
- 
          
     // UPS Service Data Options
-    var $UPSRequestAction;
-    var $UPSRequestOption;
-    var $UPSServiceCode;
+    private $UPSRequestAction;
+    private $UPSRequestOption;
+    private $UPSServiceCode;
  
-    // Address that is recieving the package 
-    var $ShipToCity;
-    var $ShipToState;
-    var $ShipToPostalCode;
-    var $ShipToCountry;
-    var $ShipToResidential='';
- 
+    // Address that is recieving the package
+    protected $ShipToCity;
+    protected $ShipToState;
+    protected $ShipToPostalCode;
+    protected $ShipToCountry;
+    protected $ShipToResidential='';
+    
+    
     // used if you don't use packages (NOT IMPLEMENTED - Use Packages)
-    var $PackageWeight;
-    var $UPSPackageType;
+    protected $PackageWeight;
+    protected $UPSPackageType;
  
     // Arrays to hold various default data
-    var $ARRAY_PickupTypes;
-    var $ARRAY_ServiceCodes;
-    var $ARRAY_PackageTypes;
-    var $ARRAY_Packages;
+    private $ARRAY_PickupTypes;
+    private $ARRAY_ServiceCodes;
+    private $ARRAY_PackageTypes;
+    private $ARRAY_Packages;
  
     // cURL return info.  Interesting for debug.
-    var $curl_array;
- 
+    protected $curl_array;
+    protected $PackageContentValue;
+    
     // Variables to hold the communication with UPS.  Saved for debug.
-    var $request;
-    var $response;
+    protected $Request;
+    protected $Response;
  
+    private $ResponseDistilled;
+    
 ###############################################################################################
  
  
@@ -272,22 +219,60 @@ class ups
 ## Constructor Function
 #################################################################################################
  
-    function ups()
+    function ups($debug = FALSE, $DEV = false, $AccessLicenseNumber = null, $UserId = null, $Password = null, $ShipperNumber = null)
     {
-         
+    	$this->debug_enabled = $debug;
+    	if($DEV)
+    	{
+    		$this->DEV = $DEV;
+    	}
+    	
+        if(isset($AccessLicenseNumber))
+        {
+        	$this->AccessLicenseNumber = $AccessLicenseNumber;
+        }
+        
         if(empty($this->AccessLicenseNumber))
         {
-            echo "<h1>AccessLicenseNumber is empty.  You need to put your access license number from UPS in this variable.</h1>";
+        	$this->AddError("<h1>AccessLicenseNumber is empty.</h1>  You need to put your access license number from UPS in this variable.</h1>");
         }
+        
+        if(isset($UserId))
+        {
+        	$this->UserId = $UserId;
+        }
+        
         if(empty($this->UserId))
         {
-            echo "<h1>UserId is empty.  You need to put your user id from UPS in this variable.</h1>";
+        	$this->AddError("<h1>UserId is empty.</h1>  You need to put your user id from UPS in this variable.</h1>");
         }
+        
+
+        if(isset($Password))
+        {
+        	$this->Password = $Password;
+        }
+        
         if(empty($this->Password))
         {
-            echo "<h1>Password is empty.  You need to put your password from UPS in this variable.</h1>";
+        	$this->AddError("<h1>Password is empty.</h1>  You need to put your password from UPS in this variable.</h1>");
         }
- 
+        
+ 		if(isset($ShipperNumber))
+ 		{
+ 			$this->ShipperNumber = $ShipperNumber;
+ 		}
+ 		
+ 		if(empty($this->ShipperNumber) && $debug)
+ 		{
+ 			$this->AddError("<h1>Shipper Number is empty.</h1> Shipper number is only required if you want to get negotiated rates.");
+ 		}
+        
+ 		if(!empty($this->ERRORS))
+ 		{
+ 			return $this->ERRORS;
+ 		}
+ 		
         // These are the pickup types from UPS at the time of this writing.  Most businesses will
         // be '01', most individuals will be '03'.  
         $this->ARRAY_PickupTypes=array(
@@ -299,32 +284,118 @@ class ups
                         20 => array( '20', 'Air Service Center'  )
                     );
  
- 
         // This is the service Type that you are shipping with.  
         // If UPS starts offering other services (and you get empty drop boxes) fill them in here
         // Make sure the array index matches the service code
-        // the true value at the end tells the Rate List Functions to return this service if they
+        // the true value in 'Display' tells the Rate List Functions to return this service if they
         // get it in a rate shop list.  these values can be adjusted by using the function
+        // The key is the Service Code from the Rates API, I don't know why the Service Codes don't 
+        // match in the Time In Transit API, but they don't.
         // SetRateListLimit(/*...*/)
-        $this->ARRAY_ServiceCodes=array(
-                         1 => array( '01', 'Next Day Air'        ,true),
-                         2 => array( '02', '2nd Day Air'     ,true),
-                         3 => array( '03', 'Ground'          ,true),
-                         7 => array( '07', 'Worldwide Express'       ,true),
-                         8 => array( '08', 'Worldwide Expendited'    ,true),
-                        11 => array( '11', 'Standard'            ,true),
-                        12 => array( '12', '3-Day Select'        ,true),
-                        13 => array( '13', 'Next Day Air Saver'      ,true),
-                        14 => array( '14', 'Next Day Air Early AM'   ,true),
-                        54 => array( '54', 'Worldwide Express Plus'  ,true),
-                        59 => array( '59', '2nd Day Air AM'      ,true),
-                        65 => array( '65', 'Express Saver'       ,true)
-                    );
- 
- 
-                     
- 
- 
+ 		// Valid Service Codes from Rates API Doc. 
+        $this->ARRAY_ServiceCodes = array(
+        		//Valid domestic values: 
+        		'14' => array(
+        				'Display' => true,
+        				'RateCode' => '14',
+        				'TimeInTransitCode' => '1DM',
+        				'Description' => 'Next Day Air Early AM'), 
+        		'01' => array(
+        				'Display' => true,
+        				'RateCode' => '01',
+        				'TimeInTransitCode' => '1DA',
+        				'Description' => 'Next Day Air'), 
+        		'13' => array(
+        				'Display' => true,
+        				'RateCode' => '13',
+        				'TimeInTransitCode' => '1DP',
+        				'Description' => 'Next Day Air Saver'), 
+        		'59' => array(
+        				'Display' => false,
+        				'RateCode' => '59',
+        				'TimeInTransitCode' => '2DM',
+        				'Description' => '2nd Day Air AM'),
+        		'02' => array(
+        				'Display' => true,
+        				'RateCode' => '02',
+        				'TimeInTransitCode' => '2DA',
+        				'Description' => '2nd Day Air'), 
+        		'12' => array( 
+        				'Display' => true,
+        				'RateCode' => '12',
+        				'TimeInTransitCode' => '3DS',
+        				'Description' => '3 Day Select'), 
+        		'02300' => array( // This code isn't straightforward, Saturday Delivery is Option Code 300
+        				'Display' => false,
+        				'RateCode' => '02',
+        				'TimeInTransitCode' => '2DAS',
+        				'Description' => '2 Day Air Saturday Delivery'),
+        		'03' => array(
+        				'Display' => true,
+        				'RateCode' => '03',
+        				'TimeInTransitCode' => 'GND',
+        				'Description' => 'Ground'),
+        		
+        		//Valid international values: 
+        		'11' => array(
+        				'Display' => true,
+        				'RateCode' => '11',
+        				'TimeInTransitCode' => '03',
+        				'Description' => 'Standard'),
+        		'07' => array(
+        				'Display' => true,
+        				'RateCode' => '07',
+        				'TimeInTransitCode' => '01',
+        				'Description' => 'Worldwide Express'), 
+        		'54' => array(
+        				'Display' => true,
+        				'RateCode' => '54',
+        				'TimeInTransitCode' => '21',
+        				'Description' => 'Worldwide Express Plus'),
+        		'08' => array(
+        				'Display' => true,
+        				'RateCode' => '08',
+        				'TimeInTransitCode' => '05',
+        				'Description' => 'Worldwide Expedited'), 
+        		'65' => array(
+        				'Display' => true,
+        				'RateCode' => '65',
+        				'TimeInTransitCode' => '28',
+        				'Description' => 'Saver'), // Required for Rating and Ignored for Shopping'),
+        		
+        		//Valid Poland to Poland Same Day values:
+        		'82' => array(
+        				'Display' => true,
+        				'RateCode' => '82',
+        				'TimeInTransitCode' => '34',
+        				'Description' => 'UPS Today Standard'), 
+        		'83' => array(
+        				'Display' => true,
+        				'RateCode' => '83',
+        				'TimeInTransitCode' => '35',
+        				'Description' => 'UPS Today Dedicated Courier'),
+        		'84' => array(
+        				'Display' => true,
+        				'RateCode' => '84',
+        				'TimeInTransitCode' => '36',
+        				'Description' => 'UPS Today Intercity'), 
+        		'85' => array(
+        				'Display' => true,
+        				'RateCode' => '85',
+        				'TimeInTransitCode' => '37',
+        				'Description' => 'UPS Today Express'), 
+        		'86' => array(
+        				'Display' => true,
+        				'RateCode' => '86',
+        				'TimeInTransitCode' => '38',
+        				'Description' => 'UPS Today Express Saver'),
+        		'96' => array(
+        				'Display' => true,
+        				'RateCode' => '96',
+        				'TimeInTransitCode' => '09',
+        				'Description' => 'UPS World Wide Express Freight'),
+        );
+        
         // Array of Package Types.  Usually '02' Package is used, but the rest are useful
         $this->ARRAY_PackageTypes=array(
                          0 => array( '00', 'Unknown'     ),
@@ -336,7 +407,9 @@ class ups
                         24 => array( '24', 'UPS 25KG Box'    ),
                         25 => array( '25', 'UPS 10KG Box'    )
                     );
- 
+        
+        $this->SetPostURL('Rate');  // set a default. Woo. 
+        $this->SetShipper(); // set default from 
     } // end ups()
      
 ##############################################################################################################
@@ -350,21 +423,21 @@ class ups
 ##############################################################################################################
  
     // URL to send request to
-    function SetPostURL($url)
+    private function SetPostURL($requestType)
     {
-        $this->postURL=$url;
+        $this->postURL = $this->RequestTypes[$requestType][$this->DEV?'DEVURL':'URL'];
     }
- 
+    
     function SetAccountInfo($ALN,$UID,$Pass)
     {
-        $this->AccessLicenseNumber=$ALN;
-        $this->UserId=$UID;
-        $this->Password=$Pass;
+    	$this->AccessLicenseNumber=$ALN;
+    	$this->UserId=$UID;
+    	$this->Password=$Pass;
     }
- 
+    
     function SetPickupType($Code)
     {
-        $this->UPSPickupTypeCode=$Code;  
+        $this->UPSPickupTypeCode = $Code;  
     }
  
     // CustomerContext can contain XML you want Posted Back
@@ -372,56 +445,59 @@ class ups
     {
         $this->CustomerContext=$context;
     }
+    
+    function SetPackageContentValue($amt=0)
+    {
+    	$this->PackageContentValue = $amt;
+    }
+    
+    // Because Service Code in the Rate API doesn't match up with the Service Code in the Time In Transit API
+    function GetRateCodeFromTITCode($titcode)
+    {
+    	foreach($this->ARRAY_ServiceCodes as $ratecode => $info)
+    	{
+    		if($info['TimeInTransitCode'] == $titcode)
+    		{
+    			return $ratecode;
+    		}
+    	}
+    	
+    	$this->AddError('Unknown Time In Transit Code requested: '.$titcode);
+    	return false;
+    }
+    
      
 ##############################################################################################################
  
- 
- 
+
  
  
 ##############################################################################################################
 ## Address Functions
 ##############################################################################################################
  
-    function SetShipper($city,$state,$zip,$country)
-    {
- 
-        $this->ShipperCity=$city;
-        $this->ShipperState=$state;
-        $this->ShipperPostalCode=$zip;
-        $this->ShipperCountry=$country;
+    // This gets run at the end of the constructor to populate defaults from the static vars. 
+    // Don't need to use it again unless you've not set those or you want to run for a different address
+	function SetShipper($city = null, $state = null, $zip = null, $country = null)
+	{
+		$this->ShipperCity = isset($city)?$city:$this->ShipFromCity;
+	    $this->ShipperState = isset($state)?$state:$this->ShipFromState;
+        $this->ShipperPostalCode = isset($zip)?$zip:$this->ShipFromPostalCode;
+        $this->ShipperCountry = isset($country)?$country:$this->ShipFromCountry;
     }
- 
- 
-    function SetShipFrom($city,$state,$zip,$country)
-    {
- 
-        $this->ShipFromCity=$city;
-        $this->ShipFromState=$state;
-        $this->ShipFromPostalCode=$zip;
-        $this->ShipFromCountry=$country;
-    }
- 
- 
+    
     function SetShipTo($city,$state,$zip,$country,$isres=0)
     {
- 
-        $this->ShipToCity=$city;
-        $this->ShipToState=$state;
-        $this->ShipToPostalCode=$zip;
-        $this->ShipToCountry=$country;
-        if($isres)
+    	$this->ShipToCity=$city;
+    	$this->ShipToState=$state;
+    	$this->ShipToPostalCode=$zip;
+    	$this->ShipToCountry=empty($country)?'USA':$country;
+    	if($isres)
         {
-            $this->ShipToResidential='<ResidentialAddress/>';
+            $this->ShipToResidential = '<ResidentialAddress/>';
         }
     }
- 
-    function SetDefaultService($default)
-    {
-        $this->DefaultService=$default;  // set the $DefaultSerice Variable
-        return 0;           // return no errors
-    }
- 
+    
  
 ##############################################################################################################
  
@@ -432,22 +508,46 @@ class ups
 ## Mode Functions
 ##############################################################################################################
  
-    // get an <option> block list of all the rates for the set packages.
-    function ModeRateShop()
+    // Submits a request for ALL the Rates for the set packages
+    function ModeRateShop($rslts = null)
     {
-            $this->UPSRequestAction='Rate';
-            $this->UPSRequestOption='shop';
- 
-            // Create the request and then send and process it.
-            $this->CreateRequest();
-            $this->Process();
- 
-            return $this->GetErrorCode();
+    	$this->UPSRequestAction='Rate';
+        $this->UPSRequestOption='shop';
+        
+ 	    // Create the request and then send and process it.
+    	$this->CreateRequest();
+        $this->ResponseDistilled = $this->Process($rslts);
+        
+        return $this->ERRORS;
     }
  
+    // Submits a request to get Time In Transit for all services 
+    // According to the API this takes into account weekends and holidays. 
+    // By default it assumes the package will be shipped today. 
+    // Functionality to change the ship date is not implemented here yet.
+    function ModeGetTimeInTransit($rslts = null)
+    {
+    	$this->UPSRequestAction = 'TimeInTransit';
+    	$this->SetPostURL($this->UPSRequestAction);
+    	$this->CreateTITRequest();
+    	$this->ResponseDistilled = $this->Process($rslts);
+    	
+    	return $this->ERRORS;
+    }
  
- 
-    // get the cost of the selected rate
+    // Want both the Rates AND the Time In Transit? Use this. 
+    // It fetches the rates, then the transit time. Why UPS doesn't
+    // offer web services to get both sets of data with one request is a mystery
+    function ModeGetRatesAndTransit()
+    {
+    	$this->ModeRateShop();
+    	$this->ModeGetTimeInTransit($this->ResponseDistilled);
+    	
+    	return $this->ERRORS;
+    }
+    
+    
+    // get the cost of the selected service
     function ModeGetRate($ServiceCode)
     {
             // set the action from ups to Rate and rate.
@@ -458,13 +558,14 @@ class ups
              
             // Create the request and then send and process it.
             $this->CreateRequest();
-            $this->Process();
+            $this->ResponseDistilled = $this->Process();
  
             // turn the details into a total cost for shipping and return it (float)
             // if the request was not successful, return 0;  (shipping is never free, hopefully)
             if($this->ResponseDistilled['Success'])
             {
-                        $retval=$this->ResponseDistilled["RateOption_0"]['TotalCost'];
+            	$tmp = array_shift($this->ResponseDistilled['RateOption']);
+                $retval = $tmp['TotalCost'];
             }
             else
             {
@@ -483,7 +584,7 @@ class ups
  
     function GetServiceName($service)
     {
-        return $this->ARRAY_ServiceCodes[intval($service)][1];
+        return $this->ARRAY_ServiceCodes[$service]['Description'];
     }
  
 ##############################################################################################################
@@ -493,19 +594,26 @@ class ups
 ## Rate List Functions 
 ##############################################################################################################
  
-    function GetRateListShort($handling=0,$sort='',$type='',$display='')
+    /**
+     * Turn the details into <option> blocks and return them.
+     * if the request was not successful, return 0;
+     * @param number $handling - Additional dollar amount to add on top of the UPS rates.
+     * @param string $sort - 'PRICE', 'SERVICE' 
+     * @param string $type - 'ARRAY', 'OPTION', 'RADIO'
+     * @param string $display - Format of description. 'TCOST_SERVICE', 'BASEDIFF' // TODO: add actual functionality
+     * @return boolean
+     */
+    function GetRateListShort($handling=0,$sort='PRICE',$type='OPTION',$display='TCOST_SERVICE')
     {
-            // turn the details into <option> blocks and return them.
-            // if the request was not successful, return 0;
             if($this->ResponseDistilled['Success'])
             {
-                for($i=0;$i<$this->ResponseDistilled['RateOptions'];$i++)
+                foreach($this->ResponseDistilled['RateOptions'] as $service => $RateOption)
                 {
-                    $service=$this->ResponseDistilled["RateOption_$i"]['Service'];
-                    $serviceType=$this->ResponseDistilled["RateOption_$i"]['ServiceType'];
-                    $totalCost=$this->ResponseDistilled["RateOption_$i"]['TotalCost']+$handling;
+                    $service=$RateOption['Service'];
+                    $serviceType=$RateOption['ServiceType'];
+                    $totalCost=$RateOption['TotalCost']+$handling;
                          
-                    if($this->ARRAY_ServiceCodes[intval($service)][2])
+                    if($this->ARRAY_ServiceCodes[$service]['Display'])
                     {
                         switch($display)
                         {
@@ -516,16 +624,14 @@ class ups
                                 break;
  
                             case 'BASEDIFF':
-                                 
-                                if(!empty($base))
+                                if(!empty($base)) // TODO: Actually set/create $base somewhere so this does something
                                 {
-                                    $cost=($totalCost=$this->ResponseDistilled["RateOption_$i"]['TotalCost']+$handling)-$base;
+                                    $cost=($totalCost=$RateOption['TotalCost']+$handling)-$base;
                                     $tc='$'.number_format($cost,2);
                                     $disp="upgrade to {$serviceType} for {$tc}";
                                 }
                                 else
                                 {
- 
                                     $base=(empty($base))?($totalCost):($base);
                                     $tc='$'.number_format($totalCost,2);
                                     $disp="{$tc} - {$serviceType}";
@@ -534,7 +640,21 @@ class ups
                         }
                         switch($type)
                         {
-                            default:
+                            case 'ARRAY': 	
+                         		switch($sort)
+                         		{
+	                         		default:
+	                         		case 'PRICE':
+	                         			$retval[($totalCost*100)] = array($service => $disp);
+	                         			break;
+	                         			
+	                         		case 'SERVICE':
+	                         			$retval["$service"] = array($service => $disp);
+	                         			break;
+                         		}
+                         		break;
+                         		
+                            default: 
                             case 'OPTION':
                                 $sel=(intval($service)==$this->DefaultService)?('SELECTED'):('');
                                 switch($sort)
@@ -579,18 +699,135 @@ __HTML__;
                         }
                     }
                 }
-                        ksort($retval);
-                        $retval=@join(' ',$retval);
+                ksort($retval);
+                if($type !== 'ARRAY')
+                {
+                	$retval=@join(' ',$retval);
+                }
             }
             else
             {
-                $retval=0;
+                $retval=FALSE;
             }
  
             return $retval;
     }
  
+    /**
+     * Format the data, including Time In Transit
+     * @param number $handling - Additional dollar amount to add on top of the UPS rates.
+     * @param string $sort - 'PRICE', 'DAYS', 'SERVICE' 
+     * @param string $type - 'ARRAY', // TODO: implement 'OPTION', 'RADIO'
+     * @param string $display - Format of description. 'TCOST_SERVICE', 'BASEDIFF' // TODO: add actual functionality
+     * @return boolean FALSE on failure, string or array depending on $type selection
+     */
+    function GetRateListWithArrival($handling=0,$sort='PRICE',$type='',$display='')
+    {
+    	$retval = array();
+    	
+    	if($this->ResponseDistilled['Success'])
+    	{
+    		foreach($this->ResponseDistilled['RateOptions'] as $service => $RateOption)
+    		{
+    			if(is_array($RateOption['Service']))
+    			{
+    				$RateOption['Service'] = $service;
+    			}
+    			
+    			if($this->ARRAY_ServiceCodes[$service]['Display'])
+    			{
+	    			$serviceType = $this->ARRAY_ServiceCodes[$service]['Description'];
+	    			$totalCost = isset($RateOption['TotalCost'])?($RateOption['TotalCost']+$handling):'Unknown';
+	    		
+	    			switch($display)
+	    			{	    					
+	    				case 'TCOST_SERVICE':
+	    					$tc = is_numeric($totalCost)?'$'.number_format($totalCost,2):$totalCost;
+	    					$disp="{$tc} - {$serviceType}";
+	    					break;
+	    			
+	    				case 'BASEDIFF':		 
+	    					if(!empty($base)) // TODO: Actually set/create $base somewhere so this does something
+	    					{
+	    						$cost=($totalCost=$RateOption['TotalCost']+$handling)-$base;
+	    						$tc = is_numeric($totalCost)?'$'.number_format($totalCost,2):$totalCost;
+	    						$disp="upgrade to {$serviceType} for {$tc}";
+	    					}
+	    					else
+	    					{
+	    			
+	    						$base=(empty($base))?($totalCost):($base);
+	    						$tc = is_numeric($totalCost)?'$'.number_format($totalCost,2):$totalCost;
+	    						$disp="{$tc} - {$serviceType}";
+	    					}
+	    					break;
+	    					
+	    				default:
+	    					$tc = is_numeric($totalCost)?'$'.number_format($totalCost,2):$totalCost;
+	    					$disp = "{$serviceType}";
+	    			}
+	    			
+	    			$list = array();
+	    			$list['service']=$disp;
+	    			$list['cost'] = $tc;
+	    			if(!isset($RateOption['EstimatedArrival']))
+	    			{
+	    				if(isset($RateOption['GuaranteedDaysToDelivery']))
+	    				{
+	    					// TODO: update this to get an estimate based on the service's rated guarantee
+	    				}
+	    			}
+	    			else
+	    			{
+	    				$list['days'] = isset($RateOption['EstimatedArrival'])?(@ceil((strtotime($RateOption['EstimatedArrival']['Date']) - time())/(86400))):'unknown';
+	    				$list['arrival'] = isset($RateOption['EstimatedArrival'])?($RateOption['EstimatedArrival']['DayOfWeek']):'unknown';
+	    			}
+	    			
+	    			switch($type)
+                    {
+						default:
+						case 'ARRAY': 
+							switch(strtoupper($sort))
+							{
+								default:
+								case 'PRICE':
+									$retval[($totalCost*100)] = $list;
+									break;
+								case 'DAYS':
+									$index = $days;
+									while(array_key_exists($index, $retval))
+									{
+										$index+= .1;
+									}	
+															
+									$retval[$index] = $list;
+									break;
+								case 'SERVICE':
+									$retval[$serviceType] = $list;
+									break;
+							}
+						break;
+	    			}
+	    		}
+    		}    
+    		ksort($retval);
+    	}
+    	else
+    	{
+    		$retval=FALSE;
+    	}
+    	return $retval;
+    }
  
+    /**
+     * sets the rates that will be returned if they are available.  empty sets all avaliable (default)
+     * Any arguments passed should be string(s) matching a Service Code (zero fill) from the Rating API 
+     * (aka. the key in $this->ARRAY_ServiceCodes)
+     * 
+     * If no arguments are passed, this will enable display of all service codes. If you're not changing them, 
+     * I recommend not using this function. 
+     * @return number
+     */
     function SetRateListLimit(/*...*/)
     {
         // If arguments were passed, it means we are limiting the options
@@ -604,14 +841,14 @@ __HTML__;
             // Turn all services off
             while(list($key,$val) = each($this->ARRAY_ServiceCodes))
             {
-                $this->ARRAY_ServiceCodes[$key][2]=false;    // turn each service off
+                $this->ARRAY_ServiceCodes[$key]['Display']=false;    // turn each service off
             }
              
             reset($this->ARRAY_ServiceCodes);    // reset the array (just to be sure)
             // turn on select servcies
             while(list($key,$val)=each($args))
             {
-                $this->ARRAY_ServiceCodes[$val][2]=true; // turn select services on
+                $this->ARRAY_ServiceCodes[$val]['Display']=true; // turn select services on
             }
         }
         else    // otherwise, make all services available
@@ -619,7 +856,10 @@ __HTML__;
             reset($this->ARRAY_ServiceCodes);    // reset the array (just to be sure)
             while(list($key,$val) = each($this->ARRAY_ServiceCodes))
             {
-                $this->ARRAY_ServiceCodes[$key][2]=true; // turn each service on
+            	if($key !== '02300') // this one's a pain in the butt. Disable by default until I figure out what else to do with it.
+            	{
+            		$this->ARRAY_ServiceCodes[$key]['Display']=true; // turn each service on
+            	}
             }
              
             reset($this->ARRAY_ServiceCodes);    // reset the array (just to be kind)
@@ -662,6 +902,16 @@ __HTML__;
 ## Error Functions
 ######################################################################################
  
+    private function AddError($err)
+    {
+    	if(!is_array($err))
+    	{
+    		$err = array('Code' => 999, 'Description' => $err);
+    	}
+    	
+    	$this->ResponseDistilled['Error'] = $err;
+    }
+    
     function GetErrorSeverity()
     {
         $retval=0;
@@ -709,29 +959,62 @@ __HTML__;
 #################################################################################################
 ## CreateRequest - assemples the XML request
 #################################################################################################
- 
+ 	
+ 	function CreateTITRequest()
+ 	{
+ 		if(empty($this->AccessLicenseNumber) || empty($this->UserId) || empty($this->Password))
+ 		{
+ 			$this->AddError('Can\'t create a Time In Transit Request without Access Credentials.');
+ 			return false;
+ 		}
+ 		
+ 		// Package Content Value can make a difference in the quote, in case you care.
+ 		$this->PackageContentValue = !empty($this->PackageContentValue)?$this->PackageContentValue:1; 
+ 		$PickupDate = date('Ymd'); // TODO: Update this to allow customized Pick Up Date
+ 		
+ 		$this->Request = <<<__REQUEST__
+ 		
+<?xml version="1.0"?>
+<AccessRequest xml:lang="en-US">
+  <AccessLicenseNumber>$this->AccessLicenseNumber</AccessLicenseNumber>
+  <UserId>$this->UserId</UserId>
+  <Password>$this->Password</Password>
+</AccessRequest>
+<?xml version="1.0"?>
+<TimeInTransitRequest xml:lang="en-US">
+  <Request>
+    <TransactionReference>
+	<CustomerContext>$this->CustomerContext</CustomerContext>
+      <XpciVersion>1.001</XpciVersion>
+    </TransactionReference>
+    <RequestAction>$this->UPSRequestAction</RequestAction>
+  </Request>
+  <TransitFrom>
+    <AddressArtifactFormat>
+      <PoliticalDivision2>$this->ShipFromCity</PoliticalDivision2>
+      <PoliticalDivision1>$this->ShipFromState</PoliticalDivision1>
+      <PostcodePrimaryLow>$this->ShipFromPostalCode</PostcodePrimaryLow>
+      <CountryCode>$this->ShipFromCountry</CountryCode>
+    </AddressArtifactFormat>
+  </TransitFrom>
+  <TransitTo>
+    <AddressArtifactFormat>
+      <PoliticalDivision2>$this->ShipToCity</PoliticalDivision2>
+      <PoliticalDivision1>$this->ShipToState</PoliticalDivision1>
+      <PostcodePrimaryLow>$this->ShipToPostalCode</PostcodePrimaryLow>
+      <CountryCode>$this->ShipToCountry</CountryCode>
+      $this->ShipToResidential
+    </AddressArtifactFormat>
+  </TransitTo>
+  <PickupDate>$PickupDate</PickupDate>
+</TimeInTransitRequest>
+__REQUEST__;
+ 		 		
+ 	}
+ 	
     function CreateRequest()
     {
         $this->Request='';
- 
-        // CREATE SHIPFROM ADDRESS BLOCK
-        $ShipFromAddress='';
-        if(!empty($this->ShipFromCity) || !empty($this->ShipFromState) || !empty($this->ShipFromPostalCode) || !empty($this->ShipFromCountry))
-        {
-            $ShipFromAddress=<<<__SHIPFROMADDRESS__
- 
-    <ShipFrom>
-      <Address>
-        <City>$this->ShipFromCity</City>
-        <StateProvinceCode>$this->ShipFromState</StateProvinceCode>
-        <PostalCode>$this->ShipFromPostalCode</PostalCode>
-        <CountryCode>$this->ShipFromCountry</CountryCode>
-      </Address>
-    </ShipFrom>
-              
-__SHIPFROMADDRESS__;
- 
-        }
  
         // CREATE PACKAGELIST BLOCK
         $PackageList='';
@@ -795,13 +1078,9 @@ __PACKAGE__;
         }
  
  
-        // write code for this to be filled in..
-        $ShipmentWeight='';
- 
- 
  
         // CREATE REQUEST BLOCK
-        $this->request=<<<__REQUEST__
+        $this->Request=<<<__REQUEST__
  
 <?xml version="1.0"?>
 <AccessRequest xml:lang="en-US">
@@ -824,9 +1103,12 @@ __PACKAGE__;
   <PickupType>
    <Code>$this->UPSPickupTypeCode</Code>
   </PickupType>
- 
+ <CustomerClassific>
+ 	<Code>$this->CustomerClassificationCode</Code>
+ </CustomerClassific>
   <Shipment>
    <Shipper>
+   	<ShipperNumber>$this->ShipperNumber</ShipperNumber>
     <Address>
       <City>$this->ShipperCity</City>
       <StateProvinceCode>$this->ShipperState</StateProvinceCode>
@@ -845,14 +1127,19 @@ __PACKAGE__;
     </Address>
    </ShipTo>
    
-   $ShipFromAddress
- 
+   <ShipFrom>
+      <Address>
+        <City>$this->ShipFromCity</City>
+        <StateProvinceCode>$this->ShipFromState</StateProvinceCode>
+        <PostalCode>$this->ShipFromPostalCode</PostalCode>
+        <CountryCode>$this->ShipFromCountry</CountryCode>
+      </Address>
+    </ShipFrom>
+              
    <Service>
     <Code>$this->UPSServiceCode</Code>
    </Service>
- 
-  $ShipmentWeight
- 
+
   $PackageList
  
   </Shipment>
@@ -864,77 +1151,53 @@ __REQUEST__;
  
     } // END CreateRequest()
  
- 
- 
- 
-###############################################################################################
-## XMLParser to put all the values from response into an array
-###############################################################################################
- 
-    function XMLParser($simple) 
-    {
-        $p = xml_parser_create();
-        xml_parser_set_option($p,XML_OPTION_CASE_FOLDING,0);
-        xml_parser_set_option($p,XML_OPTION_SKIP_WHITE,1);
-        xml_parse_into_struct($p,$simple,$vals,$index);
-        xml_parser_free($p);
- 
-        return $vals;
-    }
- 
- 
+
 ###############################################################################################
 ## Process the current settings
 ###############################################################################################
  
  
-    function Process()
+    /**
+     * Using the current settings, make the cURL request, then on to the distil
+     * @param string $out - Previously processed results (like from Rate) to be appended by new results (like from Time In Transit)
+     * @return 
+     */
+    function Process($OUT = null)
     {
-        // clear out our variables
-        unset($this->ResponseDistilled);
         $this->Response='';
- 
+
         //******************************************************************************
         // INITIALIZE cURL SESSION AND SET OPTIONS.  SEE PHP MANUAL FOR MORE DETAILS.
         // http://www.php.net/manual/en/ref.curl.php
         //******************************************************************************
  
         // INITIALIZE 
- 
         $ch = curl_init ();
  
         // TELL cURL WHERE TO POST THE REQUEST.  UNCOMMENT THE SECOND URL TO SEND A LIVE POST.
- 
         curl_setopt ($ch, CURLOPT_URL, $this->postURL);
-        //curl_setopt ($ch, CURLOPT_URL, "https://xml.surepay.com");
  
         // TELL cURL TO DO A REGULAR HTTP POST.
- 
         curl_setopt ($ch, CURLOPT_POST, 1);
  
         // PASS THE REQUEST STRING THAT WE BUILD ABOVE
- 
-        curl_setopt ($ch, CURLOPT_POSTFIELDS, $this->request);
+        curl_setopt ($ch, CURLOPT_POSTFIELDS, $this->Request);
  
         // TELL cURL TO USE strlen()  TO GET THE DATA SIZE.
- 
-        curl_setopt ($ch, CURLOPT_POSTFIELDSIZE, 0);
+        //curl_setopt ($ch, CURLOPT_POSTFIELDSIZE, 0);
  
         // TELL cURL WHEN TO TIME OUT 
         //IF YOU'RE TIMING OUT BEFORE GETTING A RESPONSE FROM SUREPAY, INCREASE THIS NUMBER 
- 
-        curl_setopt ($ch, CURLOPT_TIMEOUT, 360); 
+         curl_setopt ($ch, CURLOPT_TIMEOUT, 360); 
                            
         // TELL cURL TO INCLUDE THE HEADER IN THE OUTPUT 
- 
         curl_setopt ($ch, CURLOPT_HEADER, 0);
  
         // TELL cURL TO USE SSL VERSION 3.
- 
-        curl_setopt ($ch, CURLOPT_SSLVERSION, 3);
+        curl_setopt($ch, CURLOPT_SSLVERSION, 3);
+        curl_setopt($ch, CURLOPT_SSL_CIPHER_LIST, 'SSLv3');
           
         // TRANSFER THE SUREPAY RESPONSE INTO A VARIABLE.
- 
         curl_setopt ($ch, CURLOPT_RETURNTRANSFER, 1);
  
  
@@ -942,7 +1205,8 @@ __REQUEST__;
         // EXECUTE THE REQUEST
         //******************************************************************************
  
-        $this->result = curl_exec ($ch);
+		$this->Response = curl_exec ($ch);
+        $this->curlerr = curl_error($ch);
  
         // get stats for later use in debug, if nessesary.
         $this->curl_array = curl_getinfo($ch);
@@ -952,245 +1216,101 @@ __REQUEST__;
         //******************************************************************************
         // PARSE RESPONSE
         //******************************************************************************
+        $reader = new SimpleXMLElement($this->Response);
+
+		if(!isset($OUT) || !is_array($OUT))
+		{
+			$OUT = array(
+				'Success' => 0,
+				'Error' => array('Code' => 0),
+				'RateOptions' => array()
+			);
+		}
+		
+		// Pick and choose the info we want. 
+		// TODO: Update to include ALL of the returned data instead of just the little bits we want for the moment. 
+		$OUT['Success'] = $reader->Response->ResponseStatusCode;
+		
+		$errors = $reader->xpath('//Error');
+		if(!empty($errors))
+		{
+			foreach($errors as $e)
+			{
+				$OUT['Error'] = (array) $e;
+			}
+		}
+		
+		if(isset($reader->RatedShipment))
+		{
+			// RatedShipment won't exist in a TimeInTransit response
+			foreach($reader->RatedShipment as $ri => $RS)
+			{
+				$svc_code = $RS->Service->Code;
+				
+				if($this->IncludeService($svc_code))
+				{
+					$svc_info = array(
+						'Service' => "$svc_code",
+						'ServiceType' => $this->ARRAY_ServiceCodes["$svc_code"],
+						'TotalCost' => $RS->TotalCharges->MonetaryValue,
+						'GuaranteedDaysToDelivery' => !empty($RS->GuaranteedDaysToDelivery)?$RS->GuaranteedDaysToDelivery:''
+					);
+					$OUT['RateOptions']["$svc_code"] = $svc_info;
+				}
+			}
+		}
+		else if(isset($reader->TransitResponse))
+		{
+			// TransitResponse won't exist in a Rate response
+			foreach($reader->TransitResponse->ServiceSummary as $SS)
+			{	
+				$svc_code = $this->GetRateCodeFromTITCode($SS->Service->Code);
+				
+				if($svc_code !== false && $this->IncludeService($svc_code))
+				{
+					$svc_info = (isset($OUT['RateOptions']["$svc_code"]))?$OUT['RateOptions']["$svc_code"]:array();
+					$svc_info['Service'] = "$svc_code";
+					$svc_info['Guaranteed'] = $SS->Guaranteed->Code;
+					$svc_info['EstimatedArrival'] = (array) $SS->EstimatedArrival;
+					$svc_info['SaturdayDelivery'] = isset($SS->SaturdayDelivery)?$SS->SaturdayDelivery:'';
+					$OUT['RateOptions']["$svc_code"] = $svc_info;
+				}			
+			}
+		}
+		
+		return $OUT;
+	}  
  
- 
- 
-        // CALL THE XML PARSING FUNCTION TO CREATE ARRAY OF RESULT
- 
-        $attributes = $this->XMLParser($this->result);
- 
- 
-        $ShipRate=0;
-        $ShipPackage=0;
-        $MaxPackage=0;
- 
- 
-        // Setup Some defaults
-        $this->ResponseDistilled['Success']=0;
-        $this->ResponseDistilled['Error']['Code']=0;
- 
- 
-        reset($attributes);
-        while (list ($key, $val) = each ($attributes)) 
-        {
- 
-            switch($val['tag'])
-            {
-                case 'ResponseStatusCode':
-                    $this->ResponseDistilled['Success']=$val['value'];
-                    break;
- 
-                case 'Error':
-                    while((list($key,$val)=each($attributes)) && ($val['tag']!='Error'))
-                    {
-                        if($val['tag']=='ErrorSeverity')
-                        {
-                            $this->ResponseDistilled['Error']['Severity']=$val['value'];
-                        }
- 
-                        if($val['tag']=='ErrorCode')
-                        {
-                            $this->ResponseDistilled['Error']['Code']=$val['value'];
-                        }
-                         
-                        if($val['tag']=='ErrorDescription')
-                        {
-                            $this->ResponseDistilled['Error']['Description']=$val['value'];
-                        }
-                         
-                        if($val['tag']=='MinimumRetrySeconds')
-                        {
-                            $this->ResponseDistilled['Error']['MinimumRetrySeconds']=$val['value'];
-                        }
-                     
-                    }
-                    break;
-                     
- 
-                case 'RatedShipment':
-                    while((list($key,$val)=each($attributes)) && ($val['tag']!='RatedShipment'))
-                    {
-                        switch($val['tag'])
-                        {
-                            case 'Service':
-                                while((list($key,$val)=each($attributes)) && ($val['tag']!='Service'))
-                                {
-                                    if($val['tag']=='Code')
-                                    {
-                                        $this->ResponseDistilled["RateOption_$ShipRate"]['Service']=$val['value'];
-                                        $this->ResponseDistilled["RateOption_$ShipRate"]['ServiceType']=$this->ARRAY_ServiceCodes[intval($val['value'])][1];
-                                    }
-                                }
-                                break;
- 
-                            case 'BillingWeight':
-                                while((list($key,$val)=each($attributes)) && ($val['tag']!='BillingWeight'))
-                                {
-                                    if($val['tag']=='Code')
-                                    {
-                                        $this->ResponseDistilled["RateOption_$ShipRate"]['Unit']=$val['value'];
-                                    }
-                                    if($val['tag']=='Weight')
-                                    {
-                                        $this->ResponseDistilled["RateOption_$ShipRate"]['Weight']=$val['value'];
-                                    }
-                                }
-                                break;
- 
-                            case 'TransportationCharges':
-                                while((list($key,$val)=each($attributes)) && ($val['tag']!='TransportationCharges'))
-                                {
-                                    if($val['tag']=='CurrencyCode')
-                                    {
-                                        $this->ResponseDistilled["RateOption_$ShipRate"]['Currency']=$val['value'];
-                                    }
-                                    if($val['tag']=='MonetaryValue')
-                                    {
-                                        $this->ResponseDistilled["RateOption_$ShipRate"]['TransportCost']=$val['value'];
-                                    }
-                                }
-                                break;
- 
-                            case 'ServiceOptionsCharges':
-                                while((list($key,$val)=each($attributes)) && ($val['tag']!='ServiceOptionsCharges'))
-                                {
-                                    if($val['tag']=='CurrencyCode')
-                                    {
-                                        $this->ResponseDistilled["RateOption_$ShipRate"]['Currency']=$val['value'];
-                                    }
-                                    if($val['tag']=='MonetaryValue')
-                                    {
-                                        $this->ResponseDistilled["RateOption_$ShipRate"]['ServiceCost']=$val['value'];
-                                    }
-                                }
-                                break;
- 
-                            case 'TotalCharges':
-                                while((list($key,$val)=each($attributes)) && ($val['tag']!='TotalCharges'))
-                                {
-                                    if($val['tag']=='CurrencyCode')
-                                    {
-                                        $this->ResponseDistilled["RateOption_$ShipRate"]['Currency']=$val['value'];
-                                    }
-                                    if($val['tag']=='MonetaryValue')
-                                    {
-                                        $this->ResponseDistilled["RateOption_$ShipRate"]['TotalCost']=$val['value'];
-                                    }
-                                }
-                                break;
-                                 
-                            case 'GuaranteedDaysToDelivery':
-                                $this->ResponseDistilled["RateOption_$ShipRate"]['Days']=$val['value'];
-                                break;
-                                 
-                            case 'ScheduledDeliveryTime':
-                                $this->ResponseDistilled["RateOption_$ShipRate"]['DeliveryTime']=$val['value'];
-                                break;
- 
-                            case 'RatedPackage':
-                                while((list($key,$val)=each($attributes)) && ($val['tag']!='RatedPackage'))
-                                {
-                                    switch($val['tag'])
-                                    {
- 
-                                        case 'BillingWeight':
-                                            while((list($key,$val)=each($attributes)) && ($val['tag']!='BillingWeight'))
-                                            {
-                                                if($val['tag']=='Code')
-                                                {
-                                                    $this->ResponseDistilled["RateOption_$ShipRate"]["Package_$ShipPackage"]['Unit']=$val['value'];
-                                                }
-                                                if($val['tag']=='Weight')
-                                                {
-                                                    $this->ResponseDistilled["RateOption_$ShipRate"]["Package_$ShipPackage"]['Weight']=$val['value'];
-                                                }
-                                            }
-                                            break;
- 
-                                        case 'TransportationCharges':
-                                            while((list($key,$val)=each($attributes)) && ($val['tag']!='TransportationCharges'))
-                                            {
-                                                if($val['tag']=='CurrencyCode')
-                                                {
-                                                    $this->ResponseDistilled["RateOption_$ShipRate"]["Package_$ShipPackage"]['Currency']=$val['value'];
-                                                }
-                                                if($val['tag']=='MonetaryValue')
-                                                {
-                                                    $this->ResponseDistilled["RateOption_$ShipRate"]["Package_$ShipPackage"]['TransportCost']=$val['value'];
-                                                }
-                                            }
-                                            break;
- 
-                                        case 'ServiceOptionsCharges':
-                                            while((list($key,$val)=each($attributes)) && ($val['tag']!='ServiceOptionsCharges'))
-                                            {
-                                                if($val['tag']=='CurrencyCode')
-                                                {
-                                                    $this->ResponseDistilled["RateOption_$ShipRate"]["Package_$ShipPackage"]['Currency']=$val['value'];
-                                                }
-                                                if($val['tag']=='MonetaryValue')
-                                                {
-                                                    $this->ResponseDistilled["RateOption_$ShipRate"]["Package_$ShipPackage"]['ServiceCost']=$val['value'];
-                                                }
-                                            }
-                                            break;
- 
-                                        case 'TotalCharges':
-                                            while((list($key,$val)=each($attributes)) && ($val['tag']!='TotalCharges'))
-                                            {
-                                                if($val['tag']=='CurrencyCode')
-                                                {
-                                                    $this->ResponseDistilled["RateOption_$ShipRate"]["Package_$ShipPackage"]['Currency']=$val['value'];
-                                                }
-                                                if($val['tag']=='MonetaryValue')
-                                                {
-                                                    $this->ResponseDistilled["RateOption_$ShipRate"]["Package_$ShipPackage"]['TotalCost']=$val['value'];
-                                                }
-                                            }
-                                            break;
-                                    }
-                                }
-                                $ShipPackage++;
-                                break;
-                                 
-                        }
-                    }
-                    $ShipRate++;
-                    if($ShipPackage>$MaxPackage)
-                    {
-                        $MaxPackage=$ShipPackage;
-                    }
-                    $ShipPackage=0;
-                    break;
- 
- 
-            }
-             
-        }
- 
-        $this->ResponseDistilled['RateOptions']=$ShipRate;
-        $this->ResponseDistilled['Packages']=$MaxPackage;
- 
- 
- 
-    } // end process();
- 
- 
- 
- 
- 
+	/**
+	 * Check to see if the specified Rate Service Code is enabled or not (enable or disable using SetRateListLimit())
+	 * @param string $RateCode
+	 * @return boolean
+	 */
+	private function IncludeService($RateCode)
+	{
+		if(!isset($this->ARRAY_ServiceCodes["$RateCode"]))
+		{
+			if($this->debug_enabled)
+			{
+				// This isn't a critical error, but good to know if you're not getting the results you're expecting
+				$this->ERROR[] = "Unknown Rate Code Requested: $RateCode.";
+			}
+			return false;
+		}
+		
+		return $this->ARRAY_ServiceCodes["$RateCode"]['Display'];
+	}
  
 ###################################################################################################
 ## Debuging output of interest
 ###################################################################################################
     function Debug()
     {
- 
         // format Request for display
-        $treq=htmlspecialchars($this->request);
+        $treq=htmlspecialchars($this->Request);
  
         // format Response for display
-        $tres=htmlspecialchars($this->result);
+        $tres=htmlspecialchars($this->Result);
         $tres=str_replace("&lt;","\r&lt;",$tres);
  
         // format cURL info for display
@@ -1268,7 +1388,7 @@ __TESTPAGE__;
  
  
 ############################################################################################
-## Helper Function that changes an array into a series of nexted tables for easy display
+## Helper Function that changes an array into a series of nested tables for easy display
 ############################################################################################
  
 function buildarray($array,$arraylabel)
@@ -1324,3 +1444,4 @@ __TABLE__;
  
  
 ?>
+
