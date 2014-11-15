@@ -564,7 +564,7 @@ class ups
             // if the request was not successful, return 0;  (shipping is never free, hopefully)
             if($this->ResponseDistilled['Success'])
             {
-            	$tmp = array_shift($this->ResponseDistilled['RateOption']);
+            	$tmp = array_shift($this->ResponseDistilled['RateOptions']);
                 $retval = $tmp['TotalCost'];
             }
             else
@@ -794,13 +794,13 @@ __HTML__;
 									$retval[($totalCost*100)] = $list;
 									break;
 								case 'DAYS':
-									$index = $days;
-									while(array_key_exists($index, $retval))
+									$di = isset($RateOption['EstimatedArrival']['Date'])?strtotime($RateOption['EstimatedArrival']['Date']):time();
+									while(array_key_exists(intval($di), $retval))
 									{
-										$index+= .1;
+										$di += 1;
 									}	
 															
-									$retval[$index] = $list;
+									$retval[$di] = $list;
 									break;
 								case 'SERVICE':
 									$retval[$serviceType] = $list;
@@ -1196,6 +1196,8 @@ __REQUEST__;
         // TELL cURL TO USE SSL VERSION 3.
         curl_setopt($ch, CURLOPT_SSLVERSION, 3);
         curl_setopt($ch, CURLOPT_SSL_CIPHER_LIST, 'SSLv3');
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
           
         // TRANSFER THE SUREPAY RESPONSE INTO A VARIABLE.
         curl_setopt ($ch, CURLOPT_RETURNTRANSFER, 1);
@@ -1216,6 +1218,10 @@ __REQUEST__;
         //******************************************************************************
         // PARSE RESPONSE
         //******************************************************************************
+        if(!empty($this->curlerr))
+        {
+        	return false;
+        }
         $reader = new SimpleXMLElement($this->Response);
 
 		if(!isset($OUT) || !is_array($OUT))
